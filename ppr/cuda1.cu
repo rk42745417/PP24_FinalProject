@@ -54,24 +54,24 @@ struct edge {
 
 template <class T>
 struct HostFlowNetwork {
-    int n;
+    int n, m = 0;
     vector<vector<edge<T>>> g;
-    vector<T> excess;
-    HostFlowNetwork(int _n): n(_n), g(n), excess(n) {}
+    HostFlowNetwork(int _n): n(_n), g(n) {}
     void add_edge(int u, int v, T cap) {
         g[u].pb(edge<T>({u, v, SZ(g[v]), cap, T(0)}));
         g[v].pb(edge<T>({v, u, SZ(g[u]) - 1, T(0), T(0)}));
+        m++;
     }
 };
 
 template <class T>
 struct FlowNetwork {
-    int n;
+    int n, m;
     edge<T> *pool;
     edge<T> **g;
     T *excess;
     int *num_edges;
-    FlowNetwork(int _n, int m, HostFlowNetwork<T> &src): n(_n) {
+    FlowNetwork(int _n, HostFlowNetwork<T> &src): n(_n), m(src.m) {
         CHECK(cudaMalloc(&pool, sizeof(edge<T>) * 2 * m));
         CHECK(cudaMalloc(&g, sizeof(edge<T>*) * n));
         CHECK(cudaMalloc(&excess, sizeof(T) * n));
@@ -108,7 +108,7 @@ struct FlowNetwork {
 template <class T>
 struct PreflowPushRelabel : FlowNetwork<T> {
     int *h;
-    PreflowPushRelabel(int n, int m, HostFlowNetwork<T> &src): FlowNetwork<T>(n, m, src) {
+    PreflowPushRelabel(int n, HostFlowNetwork<T> &src): FlowNetwork<T>(n, src) {
         vector<int> host_h(n);
         CHECK(cudaMalloc(&h, sizeof(int) * n));
         CHECK(cudaMemcpy(h, host_h.data(), sizeof(int) * n, cudaMemcpyHostToDevice));
@@ -126,24 +126,14 @@ struct PreflowPushRelabel : FlowNetwork<T> {
     __device__
     bool relabel(int u) {
         if (FlowNetwork<T>::excess[u] <= 0) return false;
-        bool has_edge = false;
-        for (int i = 0; i < FlowNetwork<T>::num_edges[u]; i++) {
-            auto &e = FlowNetwork<T>::g[u][i];
-            if (e.flow < e.cap) {
-                has_edge = true;
-                if (h[u] > h[e.to])
-                    return false;
-            }
-        }
-        if (!has_edge) return false;
         int min_h = INT_MAX;
         for (int i = 0; i < FlowNetwork<T>::num_edges[u]; i++) {
             auto &e = FlowNetwork<T>::g[u][i];
             if (e.flow < e.cap) {
-                //printf("QQ %d %d\n", e.to, h[e.to]);
                 min_h = min(min_h, h[e.to]);
             }
         }
+        if (min_h == INT_MAX || min_h < h[u]) return false;
         h[u] = min_h + 1;
         //printf("relabel %d %d\n", u, h[u]);
         return true;
@@ -153,6 +143,7 @@ struct PreflowPushRelabel : FlowNetwork<T> {
         h[s] = FlowNetwork<T>::n;
         //printf("num %d\n", FlowNetwork<T>::num_edges[s]);
         for (int i = 0; i < FlowNetwork<T>::num_edges[s]; i++) {
+            //printf("test %d %d\n", i, FlowNetwork<T>::num_edges[s]);
             auto &e = FlowNetwork<T>::g[s][i];
             //printf("init %d %d %ld %ld\n", i, e.to, e.cap, e.flow);
             if (e.cap == 0) continue;
@@ -169,16 +160,19 @@ struct PreflowPushRelabel : FlowNetwork<T> {
             bool ok = false;
             for (int i = l; i < FlowNetwork<T>::n && i < r; i++) {
                 if (i == t || FlowNetwork<T>::excess[i] <= 0) continue;
-                if (i != t && relabel(i)) ok = true;
                 for (int j = 0; j < FlowNetwork<T>::num_edges[i]; j++) {
                     auto &e = FlowNetwork<T>::g[i][j];
                     if (push(e)) ok = true;
                 }
             }
-            //if (ok && k % 10000 == 0) printf("ok %d %d\n", k, id);
-            if (ok) *upd = k;
-            if (id == 0 && k % 10000 == 0) printf("done %d %ld %d\n", k, FlowNetwork<T>::excess[t], h[2]);
             g.sync();
+            for (int i = l; i < FlowNetwork<T>::n && i < r; i++) {
+                if (i == t || FlowNetwork<T>::excess[i] <= 0) continue;
+                if (i != t && relabel(i)) ok = true;
+            }
+            if (ok) *upd = k;
+            g.sync();
+            if (id == 0 && k % 1000 == 0) printf("done %d %ld\n", k, FlowNetwork<T>::excess[t]);
             if (*upd != k) break;
         }
         if (id == 0)
@@ -277,14 +271,19 @@ HostFlowNetwork<ll> read_max_file(int &n, int &m, int &s, int &t) {
 
 int main(){
     StarBurstStream;
-    cudaSetDevice(2);
+    cudaSetDevice(1);
 
     int n, m, s, t;
     auto input = read_max_file(n, m, s, t);
-    debug("read done");
-    PreflowPushRelabel flow(n, m, input);
+    //auto input = read_input(n, m, s, t);
+    debug("read done", m, input.m);
+    PreflowPushRelabel flow(n, input);
     //debug("test", n, m, s, t);
+    auto start_time = std::chrono::high_resolution_clock::now();
     cout << solve(flow, s, t) << endl;
+    auto end_time = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed_seconds = end_time - start_time;
 
+    std::cout << "Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
 
 }
