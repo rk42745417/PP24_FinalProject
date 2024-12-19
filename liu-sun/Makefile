@@ -1,2 +1,2 @@
-BK: BK.cpp
-	g++ -o BK -std=c++20 -O3 -Wall -Wconversion -Wextra BK.cpp
+lee-sun_CPU: lee-sun_CPU.cpp
+	g++ -o lee-sun_CPU -std=c++20 -O3 -Wall -Wconversion -Wextra lee-sun_CPU.cpp
