@@ -165,7 +165,7 @@ struct PreflowPushRelabel {
             }
             if (ok) *upd = k;
             grp.sync();
-            if (id == 0 && k % 1000 == 0) printf("done %d %d\n", k, excess[t]);
+            //if (id == 0 && k % 1000 == 0) printf("done %d %d\n", k, excess[t]);
             if (*upd != k) break;
         }
         if (id == 0)
@@ -242,7 +242,7 @@ HostFlowNetwork<ll> read_max_file(int &n, int &m, int &s, int &t) {
             cnt++;
             int u, v, cap;
             ss >> u >> v >> cap;
-            if (cnt % 10000 == 0) debug("read", cnt);
+            //if (cnt % 10000 == 0) debug("read", cnt);
             u--; v--;
             flow.add_edge(u, v, cap);
             //debug("add_edge", u, v, cap);
@@ -258,17 +258,23 @@ int main(){
     cudaSetDevice(1);
 
     int n, m, s, t;
-    //auto input = read_max_file(n, m, s, t);
-    auto input = read_input(n, m, s, t);
-    debug("read done", m, input.m);
-    PreflowPushRelabel flow(n, s, t, input);
-    //debug("test", n, m, s, t);
-    auto start_time = std::chrono::high_resolution_clock::now();
-    cout << solve(flow) << endl;
-    auto end_time = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double> elapsed_seconds = end_time - start_time;
+    auto read_start = std::chrono::high_resolution_clock::now();
+    auto input = read_max_file(n, m, s, t);
+    auto read_end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> read_time = read_end - read_start;
+    std::cout << "Read Time: " << read_time.count() * 1000.0 << " ms" << std::endl;
 
-    std::cout << "Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
+    auto init_start = std::chrono::high_resolution_clock::now();
+    PreflowPushRelabel flow(n, s, t, input);
+    auto init_end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> init_time = init_end - init_start;
+    std::cout << "Init Time: " << init_time.count() * 1000.0 << " ms" << std::endl;
+
+    auto solve_start = std::chrono::high_resolution_clock::now();
+    cout << solve(flow) << endl;
+    auto solve_end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> solve_time = solve_end - solve_start;
+    std::cout << "Solve Time: " << solve_time.count() * 1000.0 << " ms" << std::endl;
 
     // max flow check
     auto ret = flow.hostData();
