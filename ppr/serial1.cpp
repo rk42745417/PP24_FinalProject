@@ -41,8 +41,8 @@ struct FlowNetwork {
     vector<T> excess;
     FlowNetwork(int _n): n(_n), g(n), excess(n) {}
     void add_edge(int u, int v, T cap) {
-        g[u].pb(edge{u, v, SZ(g[v]), cap, T(0)});
-        g[v].pb(edge{v, u, SZ(g[u]) - 1, T(0), T(0)});
+        g[u].pb(edge<T>{u, v, SZ(g[v]), cap, T(0)});
+        g[v].pb(edge<T>{v, u, SZ(g[u]) - 1, T(0), T(0)});
     }
     void add_flow(edge<T> &e, T f) {
         e.flow += f;
@@ -90,7 +90,9 @@ struct PreflowPushRelabel : FlowNetwork<T> {
     }
     T solve(int s, int t) {
         init(s);
+        int k = 0;
         while (true) {
+            k++;
             bool ok = false;
             for (int i = 0; i < FlowNetwork<T>::n; i++) {
                 if (i == t || FlowNetwork<T>::excess[i] <= 0) continue;
@@ -98,8 +100,10 @@ struct PreflowPushRelabel : FlowNetwork<T> {
                 for (auto &e : FlowNetwork<T>::g[i])
                     if (push(e)) ok = true;
             }
+            if (k % 100 == 0) debug("ok", k, FlowNetwork<T>::excess[t]);
             if (!ok) break;
         }
+        debug("k", k);
         return FlowNetwork<T>::excess[t];
     }
 };
@@ -160,6 +164,7 @@ int main(){
     StarBurstStream;
 
     int n, m, s, t;
+    //auto flow = read_input(n, m, s, t);
     auto flow = read_max_file(n, m, s, t);
     debug("test", n, m, s, t);
     cout << flow.solve(s, t) << endl;
