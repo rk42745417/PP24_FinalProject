@@ -11,7 +11,7 @@ using namespace cooperative_groups;
 #define ss second
 #define SZ(a) int(a.size())
 
-using ll = long long;
+using ll = int;
 using pii = pair<int, int>;
 using pll = pair<ll, ll>;
 #ifdef zisk
@@ -65,145 +65,129 @@ struct HostFlowNetwork {
 };
 
 template <class T>
-struct FlowNetwork {
-    int n, m;
+struct PreflowPushRelabel {
+    int n, m, s, t;
     edge<T> *pool;
     edge<T> **g;
     T *excess;
     int *num_edges;
-    FlowNetwork(int _n, HostFlowNetwork<T> &src): n(_n), m(src.m) {
+    int *h;
+    PreflowPushRelabel(int _n, int _s, int _t, HostFlowNetwork<T> &src): n(_n), m(src.m), s(_s), t(_t) {
         CHECK(cudaMalloc(&pool, sizeof(edge<T>) * 2 * m));
         CHECK(cudaMalloc(&g, sizeof(edge<T>*) * n));
         CHECK(cudaMalloc(&excess, sizeof(T) * n));
         CHECK(cudaMalloc(&num_edges, sizeof(int) * n));
+        CHECK(cudaMalloc(&h, sizeof(int) * n));
         edge<T> *ptr = pool;
         vector<edge<T>*> host_g(n);
         vector<T> host_excess(n);
         vector<int> host_num_edges(n);
+        vector<int> host_h(n);
         vector<edge<T>> host_pool;
+        for (auto &e : src.g[s]) {
+            e.flow += e.cap;
+            src.g[e.to][e.rev].flow -= e.cap;
+            host_excess[e.from] -= e.cap;
+            host_excess[e.to] += e.cap;
+        }
         for (int i = 0; i < n; i++) {
             host_g[i] = ptr;
-            //if (i % 10000 == 0) debug("QQ", i, ptr, src.g[i].data());
             for (auto &e : src.g[i]) host_pool.pb(e);
-            //CHECK(cudaMemcpy(ptr, src.g[i].data(), sizeof(edge<T>) * src.g[i].size(), cudaMemcpyHostToDevice));
             ptr += src.g[i].size();
             host_num_edges[i] = src.g[i].size();
         }
+        host_h[s] = n;
+
         CHECK(cudaMemcpy(pool, host_pool.data(), sizeof(edge<T>) * 2 * m, cudaMemcpyHostToDevice));
         CHECK(cudaMemcpy(g, host_g.data(), sizeof(edge<T>*) * n, cudaMemcpyHostToDevice));
         CHECK(cudaMemcpy(excess, host_excess.data(), sizeof(T) * n, cudaMemcpyHostToDevice));
         CHECK(cudaMemcpy(num_edges, host_num_edges.data(), sizeof(int) * n, cudaMemcpyHostToDevice));
-        //pary(iter(host_num_edges));
+        CHECK(cudaMemcpy(h, host_h.data(), sizeof(int) * n, cudaMemcpyHostToDevice));
+    }
+    HostFlowNetwork<T> hostData() {
+        HostFlowNetwork<T> ret(n);
+        vector<edge<T>> host_pool(2 * m);
+        CHECK(cudaMemcpy(host_pool.data(), pool, sizeof(edge<T>) * 2 * m, cudaMemcpyDeviceToHost));
+        ret.m = m;
+        for (auto &e : host_pool) {
+            ret.g[e.from].pb(e);
+        }
+        return ret;
     }
     __device__
     void add_flow(edge<T> &e, T f) {
-        using ull = unsigned long long;
-        atomicAdd((ull*)&e.flow, (ull)f);
-        atomicAdd((ull*)&g[e.to][e.rev].flow, (ull)-f);
-        atomicAdd((ull*)&excess[e.from], (ull)-f);
-        atomicAdd((ull*)&excess[e.to], (ull)f);
-    }
-};
-
-template <class T>
-struct PreflowPushRelabel : FlowNetwork<T> {
-    int *h;
-    PreflowPushRelabel(int n, HostFlowNetwork<T> &src): FlowNetwork<T>(n, src) {
-        vector<int> host_h(n);
-        CHECK(cudaMalloc(&h, sizeof(int) * n));
-        CHECK(cudaMemcpy(h, host_h.data(), sizeof(int) * n, cudaMemcpyHostToDevice));
-        debug("init ok");
+        e.flow += f;
+        g[e.to][e.rev].flow -= f;
+        atomicAdd(&excess[e.from], -f);
+        atomicAdd(&excess[e.to], f);
     }
     __device__
     bool push(edge<T> &e) {
-        if (FlowNetwork<T>::excess[e.from] <= 0 || e.cap - e.flow <= 0 || h[e.from] != h[e.to] + 1)
+        if (excess[e.from] <= 0 || e.cap - e.flow <= 0 || h[e.from] != h[e.to] + 1)
             return false;
-        T f = min(FlowNetwork<T>::excess[e.from], e.cap - e.flow);
-        FlowNetwork<T>::add_flow(e, f);
-        //printf("push %d %d %ld\n", e.from, e.to, f);
+        T f = min(excess[e.from], e.cap - e.flow);
+        add_flow(e, f);
         return true;
     }
     __device__
     bool relabel(int u) {
-        if (FlowNetwork<T>::excess[u] <= 0) return false;
+        if (excess[u] <= 0) return false;
         int min_h = INT_MAX;
-        for (int i = 0; i < FlowNetwork<T>::num_edges[u]; i++) {
-            auto &e = FlowNetwork<T>::g[u][i];
+        for (int i = 0; i < num_edges[u]; i++) {
+            auto &e = g[u][i];
             if (e.flow < e.cap) {
                 min_h = min(min_h, h[e.to]);
             }
         }
         if (min_h == INT_MAX || min_h < h[u]) return false;
         h[u] = min_h + 1;
-        //printf("relabel %d %d\n", u, h[u]);
         return true;
     }
     __device__
-    void init(int s) {
-        h[s] = FlowNetwork<T>::n;
-        //printf("num %d\n", FlowNetwork<T>::num_edges[s]);
-        for (int i = 0; i < FlowNetwork<T>::num_edges[s]; i++) {
-            //printf("test %d %d\n", i, FlowNetwork<T>::num_edges[s]);
-            auto &e = FlowNetwork<T>::g[s][i];
-            //printf("init %d %d %ld %ld\n", i, e.to, e.cap, e.flow);
-            if (e.cap == 0) continue;
-            FlowNetwork<T>::add_flow(e, e.cap);
-        }
-    }
-    __device__
-    void _solve(int s, int t, T *flow, int *upd) {
-        grid_group g = this_grid();
-        int processSize = (FlowNetwork<T>::n + gridDim.x * blockDim.x - 1) / (gridDim.x * blockDim.x);
-        int id = g.thread_rank();
+    void solve(T *flow, int *upd) {
+        grid_group grp = this_grid();
+        int processSize = (n + gridDim.x * blockDim.x - 1) / (gridDim.x * blockDim.x);
+        int id = grp.thread_rank();
         int l = processSize * id, r = l + processSize;
         for (int k = 0; ; k++) {
             bool ok = false;
-            for (int i = l; i < FlowNetwork<T>::n && i < r; i++) {
-                if (i == t || FlowNetwork<T>::excess[i] <= 0) continue;
-                for (int j = 0; j < FlowNetwork<T>::num_edges[i]; j++) {
-                    auto &e = FlowNetwork<T>::g[i][j];
+            for (int i = l; i < n && i < r; i++) {
+                if (i == t || excess[i] <= 0) continue;
+                for (int j = 0; j < num_edges[i]; j++) {
+                    auto &e = g[i][j];
                     if (push(e)) ok = true;
                 }
             }
-            g.sync();
-            for (int i = l; i < FlowNetwork<T>::n && i < r; i++) {
-                if (i == t || FlowNetwork<T>::excess[i] <= 0) continue;
+            grp.sync();
+            for (int i = l; i < n && i < r; i++) {
+                if (i == t || excess[i] <= 0) continue;
                 if (i != t && relabel(i)) ok = true;
             }
             if (ok) *upd = k;
-            g.sync();
-            if (id == 0 && k % 1000 == 0) printf("done %d %ld\n", k, FlowNetwork<T>::excess[t]);
+            grp.sync();
+            if (id == 0 && k % 1000 == 0) printf("done %d %d\n", k, excess[t]);
             if (*upd != k) break;
         }
         if (id == 0)
-            *flow = FlowNetwork<T>::excess[t];
+            *flow = excess[t];
     }
 };
 
 template<class T>
 __global__
-void call_init(PreflowPushRelabel<T> ppr, int s) {
-    ppr.init(s);
-}
-template<class T>
-__global__
-void call_solve(PreflowPushRelabel<T> ppr, int s, int t, T *flow, int *upd) {
-    ppr._solve(s, t, flow, upd);
+void call_solve(PreflowPushRelabel<T> ppr, T *flow, int *upd) {
+    ppr.solve(flow, upd);
 }
 
 template<class T>
-T solve(PreflowPushRelabel<T> ppr, int s, int t) {
-    call_init<<<1, 1>>>(ppr, s);
-    CHECK_LAST();
-    CHECK(cudaDeviceSynchronize());
+T solve(PreflowPushRelabel<T> ppr) {
     T *flow;
     int *upd;
     int _upd = -1;
     CHECK(cudaMalloc(&flow, sizeof(T)));
     CHECK(cudaMalloc(&upd, sizeof(int)));
     CHECK(cudaMemcpy(upd, &_upd, sizeof(int), cudaMemcpyHostToDevice));
-    //call_solve<<<1, 32>>>(ppr, s, t, flow, upd);
-    void *param[] = {&ppr, &s, &t, &flow, &upd};
+    void *param[] = {&ppr, &flow, &upd};
     cudaLaunchCooperativeKernel(call_solve<T>, 128, 1024, param);
     CHECK_LAST();
     CHECK(cudaDeviceSynchronize());
@@ -274,16 +258,44 @@ int main(){
     cudaSetDevice(1);
 
     int n, m, s, t;
-    auto input = read_max_file(n, m, s, t);
-    //auto input = read_input(n, m, s, t);
+    //auto input = read_max_file(n, m, s, t);
+    auto input = read_input(n, m, s, t);
     debug("read done", m, input.m);
-    PreflowPushRelabel flow(n, input);
+    PreflowPushRelabel flow(n, s, t, input);
     //debug("test", n, m, s, t);
     auto start_time = std::chrono::high_resolution_clock::now();
-    cout << solve(flow, s, t) << endl;
+    cout << solve(flow) << endl;
     auto end_time = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> elapsed_seconds = end_time - start_time;
 
     std::cout << "Time: " << elapsed_seconds.count() * 1000.0 << " ms" << std::endl;
+
+    // max flow check
+    auto ret = flow.hostData();
+    for (int i = 0; i < n; i++) {
+        if (i == s || i == t) continue;
+        ll total = 0;
+        for (auto &e : ret.g[i])
+            total += e.flow;
+        assert(total == 0);
+    }
+    for (int i = 0; i < n; i++)
+        for (auto &e : ret.g[i])
+            assert(e.flow <= e.cap);
+    queue<int> q;
+    q.push(s);
+    vector<bool> vst(n);
+    vst[s] = true;
+    while (!q.empty()) {
+        int now = q.front();
+        q.pop();
+        for (auto &e : ret.g[s]) {
+            if (e.cap == e.flow) continue;
+            if (vst[e.to]) continue;
+            vst[e.to] = true;
+            q.push(e.to);
+        }
+    }
+    assert(!vst[t]);
 
 }
