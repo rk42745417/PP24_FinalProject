@@ -295,7 +295,7 @@ int main(){
     while (!q.empty()) {
         int now = q.front();
         q.pop();
-        for (auto &e : ret.g[s]) {
+        for (auto &e : ret.g[now]) {
             if (e.cap == e.flow) continue;
             if (vst[e.to]) continue;
             vst[e.to] = true;
