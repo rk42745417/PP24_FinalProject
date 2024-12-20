@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cinttypes>
 #include <deque>
 #include <iostream>
@@ -979,5 +980,14 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
   std::cout << graph.maxflow() << '\n';
+  std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
+  std::cerr << "Time: "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(end -
+                                                                     start)
+                   .count()
+            << "ms\n";
+  return 0;
 }
